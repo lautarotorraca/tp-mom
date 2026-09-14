@@ -6,18 +6,42 @@ from .middleware import MessageMiddlewareExchange, MessageMiddlewareQueue
 class MessageMiddlewareQueueRabbitMQ(MessageMiddlewareQueue):
     def __init__(self, host, queue_name):
         self.queue_name = queue_name
+        self.consuming = False
         self.connection = pika.BlockingConnection(pika.ConnectionParameters(host=host))
         self.channel = self.connection.channel()
         self.channel.queue_declare(queue=queue_name, durable=True)
 
     def send(self, message):
-        pass
+        self.channel.basic_publish(
+            exchange="",
+            routing_key=self.queue_name,
+            body=message,
+            properties=pika.BasicProperties(
+                delivery_mode=pika.DeliveryMode.Persistent,
+            ),
+        )
 
     def start_consuming(self, on_message_callback):
-        pass
+        def callback(channel, method, properties, body):
+            tag = method.delivery_tag
+            ack = lambda: channel.basic_ack(delivery_tag=tag)
+            nack = lambda: channel.basic_nack(delivery_tag=tag, requeue=True)
+            on_message_callback(body, ack, nack)
+
+        self.channel.basic_consume(
+            queue=self.queue_name,
+            on_message_callback=callback,
+            auto_ack=False,
+        )
+        self.consuming = True
+        try:
+            self.channel.start_consuming()
+        finally:
+            self.consuming = False
 
     def stop_consuming(self):
-        pass
+        if self.consuming:
+            self.channel.stop_consuming()
 
     def close(self):
         self.connection.close()
